@@ -34,6 +34,8 @@ from folium import plugins
 import matplotlib.pyplot as plt
 from datetime import datetime
 import pandas as pd
+from pyodide.ffi import create_proxy
+from js import FileReader, document
 
 def parse_tcx(content):
     root = ET.fromstring(content)
@@ -125,13 +127,11 @@ def handle_file_upload(file_content):
     result = process_tcx(file_content)
     return json.dumps(result)
 
-# Setup file input handling
-from pyodide.ffi import create_proxy
-
 def on_file_change(event):
-    file = event.target.files[0]
-    if file:
-        reader = js.FileReader.new()
+    file_list = event.target.files
+    if file_list and file_list.length > 0:
+        file = file_list.item(0)
+        reader = FileReader.new()
         reader.onload = create_proxy(on_file_load)
         reader.readAsText(file)
 
@@ -140,7 +140,7 @@ def on_file_load(event):
     result = handle_file_upload(file_content)
     js.update_ui(result)
 
-file_input = js.document.getElementById("tcx_file")
+file_input = document.getElementById("tcx_file")
 file_input.onchange = create_proxy(on_file_change)
     </py-script>
     <script>
