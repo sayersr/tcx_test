@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
     <script defer src="https://pyscript.net/latest/pyscript.js"></script>
     <style>
-        #map, #plot {
+        #map, #plot, #heart_rate_plot {
             width: 100%;
             height: 400px;
             margin-top: 20px;
@@ -19,7 +19,7 @@
     <div id="file_info"></div>
     <div id="activity_info"></div>
     <div id="map"></div>
-    <div id="plot"></div>
+    <div id="heart_rate_plot"></div>
 
     <py-config>
         packages = ["pandas", "folium", "matplotlib"]
@@ -46,12 +46,14 @@ def parse_tcx(content):
         time = trkpt.find('tc:Time', ns).text
         lat = trkpt.find('tc:Position/tc:LatitudeDegrees', ns)
         lon = trkpt.find('tc:Position/tc:LongitudeDegrees', ns)
+        hr = trkpt.find('tc:HeartRateBpm/tc:Value', ns)
         
         if lat is not None and lon is not None:
             trackpoints.append({
                 'time': datetime.fromisoformat(time),
                 'lat': float(lat.text),
-                'lon': float(lon.text)
+                'lon': float(lon.text),
+                'heart_rate': int(hr.text) if hr is not None else None
             })
     
     return pd.DataFrame(trackpoints)
@@ -60,43 +62,31 @@ def create_map(df):
     m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=12)
     
     points = df[['lat', 'lon']].values.tolist()
-    midpoint = len(points) // 2
     
-    outbound = points[:midpoint]
-    return_route = points[midpoint:]
+    folium.PolyLine(points, color="blue", weight=3, opacity=0.8).add_to(m)
     
-    folium.PolyLine(outbound, color="blue", weight=3, opacity=0.8).add_to(m)
-    folium.PolyLine(return_route, color="red", weight=3, opacity=0.8).add_to(m)
-    
-    plugins.PolyLineTextPath(
-        folium.PolyLine(outbound),
-        '>',
-        repeat=True,
-        offset=8,
-        attributes={'fill': '#0000FF', 'font-weight': 'bold'}
+    # Add start marker
+    folium.Marker(
+        points[0],
+        popup="Start",
+        icon=folium.Icon(color='green', icon='play')
     ).add_to(m)
     
-    plugins.PolyLineTextPath(
-        folium.PolyLine(return_route),
-        '>',
-        repeat=True,
-        offset=8,
-        attributes={'fill': '#FF0000', 'font-weight': 'bold'}
+    # Add end marker
+    folium.Marker(
+        points[-1],
+        popup="End",
+        icon=folium.Icon(color='red', icon='stop')
     ).add_to(m)
-    
-    folium.Marker(points[0], popup="Start/End", icon=folium.Icon(color='green')).add_to(m)
-    folium.Marker(points[midpoint], popup="Midpoint", icon=folium.Icon(color='orange')).add_to(m)
     
     return m
 
-def create_plot(df):
+def create_heart_rate_plot(df):
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(df['time'], df['lat'], label='Latitude')
-    ax.plot(df['time'], df['lon'], label='Longitude')
+    ax.plot(df['time'], df['heart_rate'], color='red')
     ax.set_xlabel('Time')
-    ax.set_ylabel('Degrees')
-    ax.set_title('Latitude and Longitude over Time')
-    ax.legend()
+    ax.set_ylabel('Heart Rate (bpm)')
+    ax.set_title('Heart Rate over Time')
     
     buf = io.BytesIO()
     fig.savefig(buf, format='png')
@@ -108,12 +98,12 @@ def process_tcx(file_content):
     try:
         df = parse_tcx(file_content)
         map_html = create_map(df)._repr_html_()
-        plot_img = create_plot(df)
+        heart_rate_plot = create_heart_rate_plot(df)
         
         return {
             'status': 'success',
             'map_html': map_html,
-            'plot_img': plot_img,
+            'heart_rate_plot': heart_rate_plot,
             'file_info': f"Processed {len(df)} trackpoints",
             'activity_info': f"Activity from {df['time'].min()} to {df['time'].max()}"
         }
@@ -150,7 +140,7 @@ file_input.onchange = create_proxy(on_file_change)
                 document.getElementById('file_info').textContent = data.file_info;
                 document.getElementById('activity_info').textContent = data.activity_info;
                 document.getElementById('map').innerHTML = data.map_html;
-                document.getElementById('plot').innerHTML = `<img src="${data.plot_img}" style="width:100%;">`;
+                document.getElementById('heart_rate_plot').innerHTML = `<img src="${data.heart_rate_plot}" style="width:100%;">`;
             } else {
                 alert('Error: ' + data.message);
             }
