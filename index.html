@@ -11,7 +11,7 @@
             flex-wrap: wrap;
             justify-content: space-between;
         }
-        #map, #heart_rate_plot, #cadence_plot, #speed_plot {
+        #map, #heart_rate_plot, #elevation_plot, #speed_plot {
             width: 48%;
             height: 400px;
             margin-top: 20px;
@@ -26,7 +26,7 @@
     <div class="plot-container">
         <div id="map"></div>
         <div id="heart_rate_plot"></div>
-        <div id="cadence_plot"></div>
+        <div id="elevation_plot"></div>
         <div id="speed_plot"></div>
     </div>
 
@@ -56,7 +56,7 @@ def parse_tcx(content):
         lat = trkpt.find('tc:Position/tc:LatitudeDegrees', ns)
         lon = trkpt.find('tc:Position/tc:LongitudeDegrees', ns)
         hr = trkpt.find('tc:HeartRateBpm/tc:Value', ns)
-        cad = trkpt.find('tc:Cadence', ns)
+        elevation = trkpt.find('tc:AltitudeMeters', ns)
         dist = trkpt.find('tc:DistanceMeters', ns)
         
         if lat is not None and lon is not None:
@@ -65,7 +65,7 @@ def parse_tcx(content):
                 'lat': float(lat.text),
                 'lon': float(lon.text),
                 'heart_rate': int(hr.text) if hr is not None else None,
-                'cadence': int(cad.text) if cad is not None else None,
+                'elevation': float(elevation.text) if elevation is not None else None,
                 'distance': float(dist.text) if dist is not None else None
             })
     
@@ -112,14 +112,14 @@ def process_tcx(file_content):
         df = parse_tcx(file_content)
         map_html = create_map(df)._repr_html_()
         heart_rate_plot = create_plot(df, 'heart_rate', 'Heart Rate (bpm)', 'red')
-        cadence_plot = create_plot(df, 'cadence', 'Cadence (rpm)', 'green')
+        elevation_plot = create_plot(df, 'elevation', 'Elevation (m)', 'purple')
         speed_plot = create_plot(df, 'speed', 'Speed (km/h)', 'blue')
         
         return {
             'status': 'success',
             'map_html': map_html,
             'heart_rate_plot': heart_rate_plot,
-            'cadence_plot': cadence_plot,
+            'elevation_plot': elevation_plot,
             'speed_plot': speed_plot,
             'file_info': f"Processed {len(df)} trackpoints",
             'activity_info': f"Activity from {df['time'].min()} to {df['time'].max()}"
@@ -158,7 +158,7 @@ file_input.onchange = create_proxy(on_file_change)
                 document.getElementById('activity_info').textContent = data.activity_info;
                 document.getElementById('map').innerHTML = data.map_html;
                 document.getElementById('heart_rate_plot').innerHTML = `<img src="${data.heart_rate_plot}" style="width:100%;">`;
-                document.getElementById('cadence_plot').innerHTML = `<img src="${data.cadence_plot}" style="width:100%;">`;
+                document.getElementById('elevation_plot').innerHTML = `<img src="${data.elevation_plot}" style="width:100%;">`;
                 document.getElementById('speed_plot').innerHTML = `<img src="${data.speed_plot}" style="width:100%;">`;
             } else {
                 alert('Error: ' + data.message);
