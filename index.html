@@ -5,11 +5,57 @@
     <title>TCX File Parser and Visualizer</title>
     <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
     <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+    <style>
+        #map, #plot {
+            width: 100%;
+            height: 400px;
+            margin-top: 20px;
+        }
+    </style>
 </head>
 <body>
+    <h2>TCX File Parser and Visualizer</h2>
+    <input type="file" id="tcx_file" accept=".tcx">
+    <div id="file_info"></div>
+    <div id="activity_info"></div>
+    <div id="map"></div>
+    <div id="plot"></div>
+
     <py-config>
-        packages = ["shiny", "pandas", "folium", "matplotlib"]
+        packages = ["pandas", "folium", "matplotlib"]
     </py-config>
     <py-script src="./app.py"></py-script>
+    <py-script>
+        from pyodide.ffi import create_proxy
+        from app import handle_file_upload
+        
+        def on_file_change(event):
+            file = event.target.files[0]
+            if file:
+                reader = js.FileReader.new()
+                reader.onload = create_proxy(on_file_load)
+                reader.readAsText(file)
+
+        def on_file_load(event):
+            file_content = event.target.result
+            result = handle_file_upload(file_content)
+            js.update_ui(result)
+
+        file_input = js.document.getElementById("tcx_file")
+        file_input.onchange = create_proxy(on_file_change)
+    </py-script>
+    <script>
+        function update_ui(result) {
+            const data = JSON.parse(result);
+            if (data.status === 'success') {
+                document.getElementById('file_info').textContent = data.file_info;
+                document.getElementById('activity_info').textContent = data.activity_info;
+                document.getElementById('map').innerHTML = data.map_html;
+                document.getElementById('plot').innerHTML = `<img src="${data.plot_img}" style="width:100%;">`;
+            } else {
+                alert('Error: ' + data.message);
+            }
+        }
+    </script>
 </body>
 </html>
