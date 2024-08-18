@@ -11,7 +11,7 @@
             flex-wrap: wrap;
             justify-content: space-between;
         }
-        #map, #heart_rate_plot, #elevation_plot, #speed_plot {
+        .map, .plot {
             width: 48%;
             height: 400px;
             margin-top: 20px;
@@ -20,15 +20,10 @@
 </head>
 <body>
     <h2>TCX File Parser and Visualizer</h2>
-    <input type="file" id="tcx_file" accept=".tcx">
+    <input type="file" id="tcx_files" accept=".tcx" multiple>
     <div id="file_info"></div>
     <div id="activity_info"></div>
-    <div class="plot-container">
-        <div id="map"></div>
-        <div id="heart_rate_plot"></div>
-        <div id="elevation_plot"></div>
-        <div id="speed_plot"></div>
-    </div>
+    <div id="plots_container"></div>
 
     <py-config>
         packages = ["pandas", "folium", "matplotlib"]
@@ -107,47 +102,54 @@ def create_plot(df, y_column, title, color):
     img_str = base64.b64encode(buf.read()).decode('utf-8')
     return f'data:image/png;base64,{img_str}'
 
-def process_tcx(file_content):
-    try:
-        df = parse_tcx(file_content)
+def process_tcx(file_contents):
+    all_data = []
+    for content in file_contents:
+        df = parse_tcx(content)
+        all_data.append(df)
+    
+    results = []
+    for i, df in enumerate(all_data):
         map_html = create_map(df)._repr_html_()
-        heart_rate_plot = create_plot(df, 'heart_rate', 'Heart Rate (bpm)', 'red')
-        elevation_plot = create_plot(df, 'elevation', 'Elevation (m)', 'purple')
-        speed_plot = create_plot(df, 'speed', 'Speed (km/h)', 'blue')
+        heart_rate_plot = create_plot(df, 'heart_rate', f'Heart Rate (bpm) - Activity {i+1}', 'red')
+        elevation_plot = create_plot(df, 'elevation', f'Elevation (m) - Activity {i+1}', 'purple')
+        speed_plot = create_plot(df, 'speed', f'Speed (km/h) - Activity {i+1}', 'blue')
         
-        return {
-            'status': 'success',
+        results.append({
             'map_html': map_html,
             'heart_rate_plot': heart_rate_plot,
             'elevation_plot': elevation_plot,
             'speed_plot': speed_plot,
-            'file_info': f"Processed {len(df)} trackpoints",
-            'activity_info': f"Activity from {df['time'].min()} to {df['time'].max()}"
-        }
-    except Exception as e:
-        return {
-            'status': 'error',
-            'message': str(e)
-        }
+            'activity_info': f"Activity {i+1}: from {df['time'].min()} to {df['time'].max()}"
+        })
+    
+    return {
+        'status': 'success',
+        'results': results,
+        'file_info': f"Processed {len(all_data)} file(s)"
+    }
 
-def handle_file_upload(file_content):
-    result = process_tcx(file_content)
+def handle_file_upload(file_contents):
+    result = process_tcx(file_contents)
     return json.dumps(result)
 
 def on_file_change(event):
     file_list = event.target.files
     if file_list and file_list.length > 0:
-        file = file_list.item(0)
-        reader = FileReader.new()
-        reader.onload = create_proxy(on_file_load)
-        reader.readAsText(file)
+        file_contents = []
+        for i in range(file_list.length):
+            file = file_list.item(i)
+            reader = FileReader.new()
+            reader.onload = create_proxy(lambda e, i=i: on_file_load(e, i, file_list.length, file_contents))
+            reader.readAsText(file)
 
-def on_file_load(event):
-    file_content = event.target.result
-    result = handle_file_upload(file_content)
-    js.update_ui(result)
+def on_file_load(event, index, total, file_contents):
+    file_contents.append(event.target.result)
+    if len(file_contents) == total:
+        result = handle_file_upload(file_contents)
+        js.update_ui(result)
 
-file_input = document.getElementById("tcx_file")
+file_input = document.getElementById("tcx_files")
 file_input.onchange = create_proxy(on_file_change)
     </py-script>
     <script>
@@ -155,11 +157,22 @@ file_input.onchange = create_proxy(on_file_change)
             const data = JSON.parse(result);
             if (data.status === 'success') {
                 document.getElementById('file_info').textContent = data.file_info;
-                document.getElementById('activity_info').textContent = data.activity_info;
-                document.getElementById('map').innerHTML = data.map_html;
-                document.getElementById('heart_rate_plot').innerHTML = `<img src="${data.heart_rate_plot}" style="width:100%;">`;
-                document.getElementById('elevation_plot').innerHTML = `<img src="${data.elevation_plot}" style="width:100%;">`;
-                document.getElementById('speed_plot').innerHTML = `<img src="${data.speed_plot}" style="width:100%;">`;
+                let activity_info = '';
+                let plots_html = '';
+                data.results.forEach((activity, index) => {
+                    activity_info += activity.activity_info + '\n';
+                    plots_html += `
+                        <h3>Activity ${index + 1}</h3>
+                        <div class="map">${activity.map_html}</div>
+                        <div class="plot-container">
+                            <img src="${activity.heart_rate_plot}" class="plot">
+                            <img src="${activity.elevation_plot}" class="plot">
+                            <img src="${activity.speed_plot}" class="plot">
+                        </div>
+                    `;
+                });
+                document.getElementById('activity_info').textContent = activity_info;
+                document.getElementById('plots_container').innerHTML = plots_html;
             } else {
                 alert('Error: ' + data.message);
             }
