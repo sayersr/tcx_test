@@ -2,50 +2,91 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>TCX File Parser and Visualizer</title>
+    <title>TCX File Parser and Heart Rate Visualizer</title>
+    <!-- Include PyScript CSS and JS -->
     <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
     <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+    <!-- Include Plotly for interactive plotting -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <!-- Include Leaflet for interactive mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <style>
-        .plot-container {
+        /* Styling for containers and plots */
+        .container {
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
         }
-        #map, #heart_rate_plot, #elevation_plot, #speed_plot {
+        .map-container, .plot-container {
             width: 48%;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        #map, #heart-rate-plot {
+            width: 100%;
             height: 400px;
-            margin-top: 20px;
+        }
+        /* Responsive design for smaller screens */
+        @media (max-width: 768px) {
+            .map-container, .plot-container {
+                width: 100%;
+            }
+        }
+        .heart-rate-marker {
+            border-radius: 50%;
+            width: 10px;
+            height: 10px;
+            border: 1px solid #000;
         }
     </style>
 </head>
 <body>
-    <h2>TCX File Parser and Visualizer</h2>
-    <input type="file" id="tcx_file" accept=".tcx">
+    <!-- App title -->
+    <h2>TCX File Parser and Heart Rate Visualizer</h2>
+    
+    <!-- File input for TCX files -->
+    <input type="file" id="tcx_files" accept=".tcx" multiple>
+    
+    <!-- Containers for displaying information and plots -->
     <div id="file_info"></div>
-    <div id="activity_info"></div>
-    <div class="plot-container">
-        <div id="map"></div>
-        <div id="heart_rate_plot"></div>
-        <div id="elevation_plot"></div>
-        <div id="speed_plot"></div>
+    <div id="activity_summary"></div>
+    <div id="plots_container" class="container">
+        <div class="map-container">
+            <h4>Route Map</h4>
+            <div id="map"></div>
+        </div>
+        <div class="plot-container">
+            <h4>Heart Rate Plot</h4>
+            <div id="heart-rate-plot"></div>
+        </div>
     </div>
 
+    <!-- PyScript configuration -->
     <py-config>
-        packages = ["pandas", "folium", "matplotlib"]
+        packages = ["pandas"]
     </py-config>
+    
+    <!-- Python code for processing TCX files and creating visualizations -->
     <py-script>
 import io
 import base64
 import xml.etree.ElementTree as ET
 import json
-import folium
-from folium import plugins
-import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from pyodide.ffi import create_proxy
 from js import FileReader, document
 
+# Function to format time in HH:MM:SS
+def format_time(seconds):
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+
+# Function to parse TCX file content
 def parse_tcx(content):
     root = ET.fromstring(content)
     ns = {'tc': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
@@ -56,8 +97,6 @@ def parse_tcx(content):
         lat = trkpt.find('tc:Position/tc:LatitudeDegrees', ns)
         lon = trkpt.find('tc:Position/tc:LongitudeDegrees', ns)
         hr = trkpt.find('tc:HeartRateBpm/tc:Value', ns)
-        elevation = trkpt.find('tc:AltitudeMeters', ns)
-        dist = trkpt.find('tc:DistanceMeters', ns)
         
         if lat is not None and lon is not None:
             trackpoints.append({
@@ -65,104 +104,215 @@ def parse_tcx(content):
                 'lat': float(lat.text),
                 'lon': float(lon.text),
                 'heart_rate': int(hr.text) if hr is not None else None,
-                'elevation': float(elevation.text) if elevation is not None else None,
-                'distance': float(dist.text) if dist is not None else None
             })
     
     df = pd.DataFrame(trackpoints)
-    df['speed'] = df['distance'].diff() / df['time'].diff().dt.total_seconds() * 3.6  # km/h
+    df['elapsed_time'] = (df['time'] - df['time'].iloc[0]).dt.total_seconds() / 60  # minutes
     return df
 
-def create_map(df):
-    m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=12)
+# Function to process TCX files and generate data for visualizations
+def process_tcx(file_contents):
+    all_data = []
+    for content in file_contents:
+        df = parse_tcx(content)
+        all_data.append(df)
     
-    points = df[['lat', 'lon']].values.tolist()
+    combined_data = pd.concat(all_data, keys=range(len(all_data)))
+    combined_data = combined_data.reset_index(level=0)
+    combined_data = combined_data.rename(columns={'level_0': 'activity_index'})
     
-    folium.PolyLine(points, color="blue", weight=3, opacity=0.8).add_to(m)
+    # Convert Timestamp to ISO format string
+    combined_data['time'] = combined_data['time'].dt.strftime('%Y-%m-%dT%H:%M:%S')
     
-    folium.Marker(
-        points[0],
-        popup="Start",
-        icon=folium.Icon(color='green', icon='play')
-    ).add_to(m)
+    plot_data = combined_data.to_dict(orient='records')
     
-    folium.Marker(
-        points[-1],
-        popup="End",
-        icon=folium.Icon(color='red', icon='stop')
-    ).add_to(m)
-    
-    return m
-
-def create_plot(df, y_column, title, color):
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(df['time'], df[y_column], color=color)
-    ax.set_xlabel('Time')
-    ax.set_ylabel(title)
-    ax.set_title(f'{title} over Time')
-    
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    img_str = base64.b64encode(buf.read()).decode('utf-8')
-    return f'data:image/png;base64,{img_str}'
-
-def process_tcx(file_content):
-    try:
-        df = parse_tcx(file_content)
-        map_html = create_map(df)._repr_html_()
-        heart_rate_plot = create_plot(df, 'heart_rate', 'Heart Rate (bpm)', 'red')
-        elevation_plot = create_plot(df, 'elevation', 'Elevation (m)', 'purple')
-        speed_plot = create_plot(df, 'speed', 'Speed (km/h)', 'blue')
+    summaries = []
+    for i, df in enumerate(all_data):
+        total_time = (df['time'].iloc[-1] - df['time'].iloc[0]).total_seconds()  # seconds
+        avg_heart_rate = df['heart_rate'].mean()
         
-        return {
-            'status': 'success',
-            'map_html': map_html,
-            'heart_rate_plot': heart_rate_plot,
-            'elevation_plot': elevation_plot,
-            'speed_plot': speed_plot,
-            'file_info': f"Processed {len(df)} trackpoints",
-            'activity_info': f"Activity from {df['time'].min()} to {df['time'].max()}"
-        }
-    except Exception as e:
-        return {
-            'status': 'error',
-            'message': str(e)
-        }
+        summary = f"Activity {i+1}: Time: {format_time(total_time)}, Avg HR: {avg_heart_rate:.0f} bpm"
+        summaries.append(summary)
+    
+    return {
+        'status': 'success',
+        'plot_data': plot_data,
+        'file_info': f"Processed {len(all_data)} file(s)",
+        'summaries': summaries
+    }
 
-def handle_file_upload(file_content):
-    result = process_tcx(file_content)
+# Function to handle file upload and process TCX files
+def handle_file_upload(file_contents):
+    result = process_tcx(file_contents)
     return json.dumps(result)
 
+# Function to handle file selection
 def on_file_change(event):
     file_list = event.target.files
     if file_list and file_list.length > 0:
-        file = file_list.item(0)
-        reader = FileReader.new()
-        reader.onload = create_proxy(on_file_load)
-        reader.readAsText(file)
+        file_contents = []
+        for i in range(file_list.length):
+            file = file_list.item(i)
+            reader = FileReader.new()
+            reader.onload = create_proxy(lambda e, i=i: on_file_load(e, i, file_list.length, file_contents))
+            reader.readAsText(file)
 
-def on_file_load(event):
-    file_content = event.target.result
-    result = handle_file_upload(file_content)
-    js.update_ui(result)
+# Function to handle file loading
+def on_file_load(event, index, total, file_contents):
+    file_contents.append(event.target.result)
+    if len(file_contents) == total:
+        result = handle_file_upload(file_contents)
+        js.update_ui(result)
 
-file_input = document.getElementById("tcx_file")
+# Set up file input event listener
+file_input = document.getElementById("tcx_files")
 file_input.onchange = create_proxy(on_file_change)
     </py-script>
+    
+    <!-- JavaScript to update the UI with processed data and handle interactivity -->
     <script>
+        let map, plotData, heartRateMarkers;
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'];
+
         function update_ui(result) {
             const data = JSON.parse(result);
             if (data.status === 'success') {
+                // Update file info
                 document.getElementById('file_info').textContent = data.file_info;
-                document.getElementById('activity_info').textContent = data.activity_info;
-                document.getElementById('map').innerHTML = data.map_html;
-                document.getElementById('heart_rate_plot').innerHTML = `<img src="${data.heart_rate_plot}" style="width:100%;">`;
-                document.getElementById('elevation_plot').innerHTML = `<img src="${data.elevation_plot}" style="width:100%;">`;
-                document.getElementById('speed_plot').innerHTML = `<img src="${data.speed_plot}" style="width:100%;">`;
+                
+                // Update activity summary
+                let activity_summary = data.summaries.join('\n');
+                document.getElementById('activity_summary').textContent = activity_summary;
+                
+                // Store plot data globally
+                plotData = data.plot_data;
+                
+                // Create and update plots
+                createMap();
+                createHeartRatePlot();
             } else {
                 alert('Error: ' + data.message);
             }
+        }
+
+        function getColor(heartRate) {
+            // Define color ranges for heart rate
+            if (heartRate < 100) return '#00ff00';  // Green
+            if (heartRate < 120) return '#ffff00';  // Yellow
+            if (heartRate < 140) return '#ffa500';  // Orange
+            if (heartRate < 160) return '#ff4500';  // OrangeRed
+            return '#ff0000';  // Red
+        }
+
+        function createMap() {
+            if (map) {
+                map.remove();
+            }
+
+            map = L.map('map').setView([0, 0], 2);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            heartRateMarkers = L.layerGroup().addTo(map);
+
+            let bounds = L.latLngBounds();
+
+            plotData.forEach((point, index) => {
+                bounds.extend([point.lat, point.lon]);
+
+                let markerColor = getColor(point.heart_rate);
+                let marker = L.circleMarker([point.lat, point.lon], {
+                    radius: 5,
+                    fillColor: markerColor,
+                    color: '#000',
+                    weight: 1,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(heartRateMarkers);
+
+                marker.bindPopup(`Heart Rate: ${point.heart_rate} bpm<br>Time: ${point.elapsed_time.toFixed(2)} minutes`);
+            });
+
+            map.fitBounds(bounds);
+        }
+
+        function createHeartRatePlot() {
+            const traces = [];
+            let currentActivityIndex = -1;
+            let currentTrace = null;
+
+            plotData.forEach((point, index) => {
+                if (point.activity_index !== currentActivityIndex) {
+                    if (currentTrace) {
+                        traces.push(currentTrace);
+                    }
+                    currentActivityIndex = point.activity_index;
+                    currentTrace = {
+                        x: [],
+                        y: [],
+                        mode: 'lines+markers',
+                        type: 'scatter',
+                        name: `Activity ${currentActivityIndex + 1}`,
+                        line: { color: colors[currentActivityIndex % colors.length] },
+                        marker: { 
+                            size: 6,
+                            color: [],
+                            colorscale: [
+                                [0, '#00ff00'],
+                                [0.25, '#ffff00'],
+                                [0.5, '#ffa500'],
+                                [0.75, '#ff4500'],
+                                [1, '#ff0000']
+                            ],
+                            showscale: true,
+                            colorbar: {
+                                title: 'Heart Rate (bpm)',
+                                tickvals: [80, 100, 120, 140, 160, 180],
+                                ticktext: ['80', '100', '120', '140', '160', '180+']
+                            }
+                        }
+                    };
+                }
+                currentTrace.x.push(point.elapsed_time);
+                currentTrace.y.push(point.heart_rate);
+                currentTrace.marker.color.push(point.heart_rate);
+            });
+
+            if (currentTrace) {
+                traces.push(currentTrace);
+            }
+
+            const layout = {
+                title: 'Heart Rate over Time',
+                xaxis: {title: 'Time Elapsed (minutes)'},
+                yaxis: {title: 'Heart Rate (bpm)'}
+            };
+
+            Plotly.newPlot('heart-rate-plot', traces, layout);
+
+            document.getElementById('heart-rate-plot').on('plotly_hover', function(eventData) {
+                var points = eventData.points[0];
+                var curveNumber = points.curveNumber;
+                var pointIndex = points.pointIndex;
+                
+                var mapPoint = plotData[curveNumber * plotData.length / traces.length + pointIndex];
+                
+                if (mapPoint) {
+                    map.setView([mapPoint.lat, mapPoint.lon], map.getZoom());
+                    heartRateMarkers.eachLayer(function(layer) {
+                        if (layer.getLatLng().lat === mapPoint.lat && layer.getLatLng().lng === mapPoint.lon) {
+                            layer.openPopup();
+                        }
+                    });
+                }
+            });
+
+            document.getElementById('heart-rate-plot').on('plotly_unhover', function(eventData) {
+                heartRateMarkers.eachLayer(function(layer) {
+                    layer.closePopup();
+                });
+            });
         }
     </script>
 </body>
